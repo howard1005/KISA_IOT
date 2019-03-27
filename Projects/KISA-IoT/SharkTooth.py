@@ -1,12 +1,14 @@
 import dpkt
+import copy
 
 """
 Src_file_name = 'D:\\tasks\\Projects\\KISA IoT 2년차 (2019년 1월 ~)' \
                 '\\네트워크패킷수집\\EZVIZ_dump_from_n604s\\refresh.pcap'
 """
-Src_file_name = 'D:\\VM\\shared\\00_frag_udp.pcapng'
-# Src_file_name = 'D:\\VM\\shared\\00_frag.pcapng'
-Packet_parsed_list = list()
+# Src_file_name = 'D:\\VM\\shared\\00_frag_udp.pcapng'
+Src_file_name = 'D:\\VM\\shared\\00_frag.pcapng'
+Packet_list = list()
+Parsed_list = list()
 
 ETH_TYPE_IP = dpkt.ethernet.ETH_TYPE_IP
 ETH_TYPE_IP6 = dpkt.ethernet.ETH_TYPE_IP6
@@ -22,6 +24,9 @@ TH_ACK = 0x10
 TH_URG = 0x20
 TH_ECE = 0x40
 TH_CWR = 0x80
+
+TIME_WINDOW_SIZE = 5
+DECIMAL_PRECISION = 6
 
 Feature_list = ['protocol_type', 'service', 'flag', 'src_bytes', 'dst_bytes', 'count', 'srv_count', 'serror_rate',
                 'srv_serror_rate', 'rerror_rate', 'srv_rerror_rate', 'same_srv_rate', 'diff_srv_rate', 'dst_host_count',
@@ -55,13 +60,6 @@ def load_and_read_pcap(file_name):
     else:
         raise NotImplementedError
 
-    """
-    for ts, buf in read_instance:
-        new_dict = dict()
-        new_dict['ts'] = ts
-        new_dict['pkt'] = buf
-        Packet_list.append(new_dict)
-    """
     return read_instance
 
 
@@ -143,18 +141,26 @@ def _get_past_2_seconds(curr_time):
 
 
 def _reassemble_packet(frag_id):
-    assembled_packet = None
+    # 1. Sorting fragments by order
+    Fragment_buffer[frag_id]['packets'].sort(key=lambda pkt: dpkt.ethernet.Ethernet(pkt).data.offset)
+
+    # 2. Temporarily assemble packet
+    tmp_assembled_packet = None
     for frag in Fragment_buffer[frag_id]['packets']:
-        if assembled_packet is None:
-            assembled_packet = bytes(frag)
+        if tmp_assembled_packet is None:
+            tmp_assembled_packet = bytes(frag)  # Including ethernet header and ip header
         else:
-            assembled_packet += bytes(dpkt.ethernet.Ethernet(frag).data.data)
+            tmp_assembled_packet += bytes(dpkt.ethernet.Ethernet(frag).data.data)   # Including only ip data
 
-    tmp_assembled_packet = dpkt.ethernet.Ethernet(assembled_packet)
-    print(tmp_assembled_packet)
-    print(tmp_assembled_packet.data)
+    # 3. Modifying ip header length
+    packet_front_part = copy.deepcopy(tmp_assembled_packet[:6+6+2+2])
+    packet_rear_part = copy.deepcopy(tmp_assembled_packet[6+6+2+2+2:])
+    ip_length = 2 + 2 + len(packet_rear_part)   # Version, Header Length (2 bytes) + IP Length (2 bytes) + The rest
 
-    # ip_level.data.len = bytes(Fragment_buffer[frag_id]['tot_len'] + ip_level.data.hl * 4)
+    assembled_packet = packet_front_part + bytes(ip_length.to_bytes(2, byteorder='big')) + packet_rear_part
+    # assembled_packet = dpkt.ethernet.Ethernet(assembled_packet)
+
+    del tmp_assembled_packet
 
     Fragment_buffer[frag_id]['reassembled'] = assembled_packet
 
@@ -171,7 +177,7 @@ def _is_fragment(packet, ip_level):
             Fragment_buffer[ip_level.id]['num_of_frags'] = 0
 
         if ip_level.mf == 0:    # If this is the last fragmentation
-            assert(ip_level.len - ip_level.hl * 4 == ip_level.data.__len__())
+            assert ip_level.len - ip_level.hl * 4 == ip_level.data.__len__()
             Fragment_buffer[ip_level.id]['tot_len'] = ip_level.offset + ip_level.len - ip_level.hl * 4
 
         Fragment_buffer[ip_level.id]['packets'].append(packet)
@@ -202,7 +208,7 @@ def _is_valid_protocol(ether_frame):
 
 
 def _extract_basic_features(read_instance):
-    global Packet_parsed_list
+    global Packet_list, Parsed_list
 
     packet_idx = 0
     for ts, buf in read_instance:
@@ -236,60 +242,231 @@ def _extract_basic_features(read_instance):
         service = _extract_service()
         ctrl_flag = _extract_ctrl_flag(ip_level)
         num_of_frags = _get_num_of_frags(ip_level)
-        if num_of_frags > 0:    # Fragmentation
+        if num_of_frags > 0:    # Fragmented
             tl_data_len = Fragment_buffer[ip_level.id]['tot_len']
             whole_packet = Fragment_buffer[ip_level.id]['reassembled']
             del Fragment_buffer[ip_level.id]
-        else:                   # Not Fragmentation
+        else:                   # Not Fragmented
             tl_data_len = _extract_transport_layer_data_len(ip_level)
             whole_packet = buf
+        if converted_src_addr == converted_dst_addr:
+            src_dst_same = 1    # True
+        else:
+            src_dst_same = 0    # False
 
         # print(whole_packet)
         # print(len(whole_packet))
         new_dict_features['idx'] = packet_idx
-        # new_dict_features['timestamp'] = ts
-        # new_dict_features['src_addr'] = converted_src_addr
-        # new_dict_features['dst_addr'] = converted_dst_addr
+        new_dict_features['timestamp'] = ts
+        new_dict_features['src_addr'] = converted_src_addr
+        new_dict_features['dst_addr'] = converted_dst_addr
 
         new_dict_features['protocol_type'] = protocol_type
         new_dict_features['tl_data_len'] = tl_data_len
         new_dict_features['service'] = service
         new_dict_features['flag'] = ctrl_flag
-
         new_dict_features['num_of_frags'] = num_of_frags
+        new_dict_features['src_dst_same'] = src_dst_same
 
-        new_packet_parsed = dict()
-        new_packet_parsed['ts'] = ts
-        new_packet_parsed['packet'] = whole_packet
-        new_packet_parsed['parsed'] = new_dict_features
-        Packet_parsed_list.append(new_packet_parsed)
+        Parsed_list.append(new_dict_features)
+        Packet_list.append(whole_packet)
+
+    assert len(Packet_list) == len(Parsed_list)
 
 
-def _extract_tcp_state():
-    return 'None', "None"
+def _extract_time_window_features(past_packet_parsed_list, target_packet, target_parsed):
+    num_of_packets = len(past_packet_parsed_list)
+    num_of_acks = 0
+
+    for past_packet, past_parsed in past_packet_parsed_list:
+        if 'ACK' in past_parsed['flag']:
+            num_of_acks += 1
+
+    if num_of_packets == 0:
+        target_parsed['srv_ack_rate'] = 0
+    else:
+        target_parsed['srv_ack_rate'] = format(num_of_acks / num_of_packets, '0.' + str(DECIMAL_PRECISION) + 'f')
+
+
+def _grasp_first_tcp_state_context(packet):
+    tcp_level = dpkt.ethernet.Ethernet(packet).data.data
+    ctrl_flag = tcp_level.flags
+
+    if ctrl_flag & TH_SYN:
+        if ctrl_flag & TH_ACK:  # SYN,ACK = S0->S1
+            return 'S0'
+        else:                   # SYN = INIT->S0
+            return 'INIT'
+    else:
+        raise NotImplementedError
+
+
+def _grasp_tcp_state_context(packet, prev_state, server_ip, client_ip):
+    ether_level = dpkt.ethernet.Ethernet(packet)
+    ip_level = ether_level.data
+    tcp_level = ip_level.data
+    ctrl_flag = tcp_level.flags
+
+    if ether_level.type == ETH_TYPE_IP:
+        src_addr = _convert_addr(ip_level.src, 'IPv4')
+    elif ether_level.type == ETH_TYPE_IP6:
+        src_addr = _convert_addr(ip_level.src, 'IPv6')
+    else:
+        raise NotImplementedError
+
+    if prev_state == 'INIT':
+        if ctrl_flag ^ TH_SYN == 0 and src_addr == client_ip:
+            return 'S0'
+        elif ctrl_flag ^ TH_SYN ^ TH_ACK == 0 and src_addr == server_ip:
+            return 'S4'
+        elif ctrl_flag ^ TH_FIN == 0 and src_addr == client_ip:
+            return 'SH'
+        else:
+            return 'OTH'
+    elif prev_state == 'S0':
+        if ctrl_flag ^ TH_SYN ^ TH_ACK == 0 and src_addr == server_ip:
+            return 'S1'
+        elif ctrl_flag ^ TH_RST == 0 and src_addr == server_ip:
+            return 'REJ'
+        elif ctrl_flag ^ TH_RST == 0 and src_addr == client_ip:
+            return 'RSTOS0'
+        else:
+            raise NotImplementedError
+    elif prev_state == 'S1':
+        if ctrl_flag ^ TH_ACK == 0 and src_addr == client_ip:
+            return 'ESTAB'
+        elif ctrl_flag ^ TH_RST == 0 and src_addr == client_ip:
+            return 'RST0'
+        elif ctrl_flag ^ TH_RST == 0 and src_addr == server_ip:
+            return 'RSTR'
+        else:
+            raise NotImplementedError
+    elif prev_state == 'ESTAB':
+        if ctrl_flag ^ TH_RST == 0 and src_addr == client_ip:
+            return 'RST0'
+        elif ctrl_flag ^ TH_RST == 0 and src_addr == server_ip:
+            return 'RSTR'
+        elif ctrl_flag & TH_FIN and src_addr == client_ip:
+            return 'S2'
+        elif ctrl_flag & TH_FIN and src_addr == server_ip:
+            return 'S3'
+        else:
+            return 'ESTAB'
+    elif prev_state == 'S2':
+        if ctrl_flag ^ TH_FIN ^ TH_ACK == 0 and src_addr == server_ip:
+            return 'SF'
+        elif ctrl_flag & TH_FIN and src_addr == server_ip:
+            return 'S2F'
+        else:
+            raise NotImplementedError
+    elif prev_state == 'S2F':
+        if ctrl_flag & TH_ACK and src_addr == client_ip:
+            return 'SF'
+        else:
+            raise NotImplementedError
+    elif prev_state == 'S3':
+        print(bin(ctrl_flag))
+        if ctrl_flag ^ TH_FIN ^ TH_ACK == 0 and src_addr == client_ip:
+            return 'SF'
+        elif ctrl_flag & TH_FIN and src_addr == client_ip:
+            return 'S3F'
+        else:
+            raise NotImplementedError
+    elif prev_state == 'S3F':
+        if ctrl_flag & TH_ACK and src_addr == server_ip:
+            return 'SF'
+        else:
+            raise NotImplementedError
+    elif prev_state == 'SF':
+        if ctrl_flag & TH_ACK:
+            return 'SF'
+        else:
+            raise NotImplementedError
+    elif prev_state == 'S4':
+        if ctrl_flag ^ TH_RST == 0 and src_addr == server_ip:
+            return 'RSTRH'
+        elif ctrl_flag ^ TH_FIN == 0 and src_addr == server_ip:
+            return 'SHR'
+        else:
+            raise NotImplementedError
+    else:
+        raise NotImplementedError
+
+
+def _extract_state_transition():
+    tmp_host_state = dict()
+
+    packet_parsed_list = zip(Packet_list, Parsed_list)
+    for packet, parsed in packet_parsed_list:
+        # Check if TCP packet
+        # TODO - Add dummy state data for UDP or other protocols for being compatible
+        if not (parsed['protocol_type'] == 'TCP'):
+            continue
+
+        src_addr = parsed['src_addr']
+        src_port = dpkt.ethernet.Ethernet(packet).data.data.sport
+        dst_addr = parsed['dst_addr']
+        dst_port = dpkt.ethernet.Ethernet(packet).data.data.dport
+
+        if src_addr < dst_addr:
+            smaller = src_addr
+            smaller_port = src_port
+            bigger = dst_addr
+            bigger_port = dst_port
+        else:
+            smaller = dst_addr
+            smaller_port = dst_port
+            bigger = src_addr
+            bigger_port = src_port
+
+        if not (smaller in tmp_host_state):
+            tmp_host_state[smaller] = dict()
+            tmp_host_state[smaller][smaller_port] = dict()
+        if not (bigger in tmp_host_state[smaller][smaller_port]):
+            tmp_host_state[smaller][smaller_port][bigger] = dict()
+            first_state = _grasp_first_tcp_state_context(packet)
+            tmp_host_state[smaller][smaller_port][bigger][bigger_port] = dict()
+            tmp_host_state[smaller][smaller_port][bigger][bigger_port]['state'] = first_state
+
+            if tmp_host_state[smaller][smaller_port][bigger][bigger_port]['state'] == 'INIT':
+                tmp_host_state[smaller][smaller_port][bigger][bigger_port]['client_ip'] = src_addr
+                tmp_host_state[smaller][smaller_port][bigger][bigger_port]['server_ip'] = dst_addr
+            else:
+                raise NotImplementedError
+
+        server_ip = tmp_host_state[smaller][smaller_port][bigger][bigger_port]['server_ip']
+        client_ip = tmp_host_state[smaller][smaller_port][bigger][bigger_port]['client_ip']
+        prev_state = tmp_host_state[smaller][smaller_port][bigger][bigger_port]['state']
+        curr_state = _grasp_tcp_state_context(packet, prev_state, server_ip, client_ip)
+
+        parsed['tcp_state'] = (prev_state, curr_state)
+        tmp_host_state[smaller][smaller_port][bigger][bigger_port]['state'] = curr_state
+        # del tmp_host_state[smaller]
+
+        # print(src_addr)
+        # print(dst_addr)
+    pass
 
 
 def _extract_advanced_features():
-    global Packet_parsed_list
+    packet_parsed_list = zip(Packet_list, Parsed_list)
+    packet_parsed_in_time_window = list()
 
-    for single_dict in Packet_parsed_list:
-        ts = single_dict['ts']
-        packet = single_dict['packet']
-        parsed = single_dict['parsed']
+    for packet, parsed in packet_parsed_list:
+        if len(packet_parsed_in_time_window) > 0:   # Maintaining Time Window
+            tail_ts = parsed['timestamp']
+            while True:
+                head_ts = packet_parsed_in_time_window[0][1]['timestamp']
+                if tail_ts - head_ts > TIME_WINDOW_SIZE:    # If packets out of time window are remained
+                    del packet_parsed_in_time_window[0]     #  then remove them
+                else:           # If no packets out of time window are remained
+                    break       #  then break loop
 
-        print(dpkt.ethernet.Ethernet(packet))
+        _extract_time_window_features(packet_parsed_in_time_window, packet, parsed)
+        packet_parsed_in_time_window.append((packet, parsed))
 
-        # ether_level = dpkt.ethernet.Ethernet(packet)
-        # print(ether_level.data)
-        # ip_level = ether_level.data
-        # print(ip_level.data)
-
-        """
-        new_dict_features = dict()
-        prev_state, curr_state = _extract_tcp_state()
-        new_dict_features['curr_state'] = curr_state
-        """
-        pass
+    del packet_parsed_in_time_window
+    _extract_state_transition()
 
 
 def parse_file(read_instance):
@@ -300,5 +477,6 @@ def parse_file(read_instance):
 read_instance = load_and_read_pcap(Src_file_name)
 parse_file(read_instance)
 
-for single_dict in Packet_parsed_list:
-    print(single_dict['parsed'])
+packet_parsed_list = zip(Packet_list, Parsed_list)
+for _, parsed in packet_parsed_list:
+    print(parsed)
