@@ -25,7 +25,8 @@ TH_URG = 0x20
 TH_ECE = 0x40
 TH_CWR = 0x80
 
-TIME_WINDOW_SIZE = 5
+TIME_WINDOW_SIZE_CNT = 100
+TIME_WINDOW_SIZE_SEC = 5
 DECIMAL_PRECISION = 6
 
 Feature_list = ['protocol_type', 'service', 'flag', 'src_bytes', 'dst_bytes', 'count', 'srv_count', 'serror_rate',
@@ -37,14 +38,13 @@ Symbol_fields = ['protocol_type', 'service', 'flag']
 Field_symbol = dict()
 Field_symbol['protocol_type'] = ['tcp', 'udp', 'icmp']
 Field_symbol['service'] = ['aol', 'auth', 'bgp', 'courier', 'csnet_ns', 'ctf', 'daytime', 'discard', 'domain',
-                          'domain_u', 'echo', 'eco_i', 'ecr_i', 'efs', 'exec', 'finger', 'ftp', 'ftp_data',
-                          'gopher', 'harvest', 'hostnames', 'http', 'http_2784', 'http_443', 'http_8001',
-                          'imap4', 'IRC', 'iso_tsap', 'klogin', 'kshell', 'ldap', 'link', 'login', 'mtp',
-                          'name', 'netbios_dgm', 'netbios_ns', 'netbios_ssn', 'netstat', 'nnsp', 'nntp',
-                          'ntp_u', 'other', 'pm_dump', 'pop_2', 'pop_3', 'printer', 'private', 'red_i',
-                          'remote_job', 'rje', 'shell', 'smtp', 'sql_net', 'ssh', 'sunrpc', 'supdup', 'systat',
-                          'telnet', 'tftp_u', 'tim_i', 'time', 'urh_i', 'urp_i', 'uucp', 'uucp_path', 'vmnet',
-                          'whois', 'X11', 'Z39_50']
+                           'domain_u', 'echo', 'eco_i', 'ecr_i', 'efs', 'exec', 'finger', 'ftp', 'ftp_data', 'gopher',
+                           'harvest', 'hostnames', 'http', 'http_2784', 'http_443', 'http_8001', 'imap4', 'IRC',
+                           'iso_tsap', 'klogin', 'kshell', 'ldap', 'link', 'login', 'mtp', 'name', 'netbios_dgm',
+                           'netbios_ns', 'netbios_ssn', 'netstat', 'nnsp', 'nntp', 'ntp_u', 'other', 'pm_dump',
+                           'pop_2', 'pop_3', 'printer', 'private', 'red_i', 'remote_job', 'rje', 'shell', 'smtp',
+                           'sql_net', 'ssh', 'sunrpc', 'supdup', 'systat', 'telnet', 'tftp_u', 'tim_i', 'time',
+                           'urh_i', 'urp_i', 'uucp', 'uucp_path', 'vmnet', 'whois', 'X11', 'Z39_50']
 Field_symbol['flag'] = ['OTH', 'REJ', 'RSTO', 'RSTOS0', 'RSTR', 'S0', 'S1', 'S2', 'S3', 'SF', 'SH']
 
 Fragment_buffer = dict()
@@ -130,7 +130,7 @@ def _extract_ctrl_flag(ip_packet):
 def _extract_transport_layer_data_len(ip_packet):
     try:
         result = ip_packet.data.data.__len__()
-    except:
+    except Exception as e:
         result = ip_packet.data.__len__()
 
     return result
@@ -165,6 +165,9 @@ def _reassemble_packet(frag_id):
     Fragment_buffer[frag_id]['reassembled'] = assembled_packet
 
 
+# Return Value
+# True : Fragmentation
+# False: Not fragmentation or all fragments has arrived
 def _is_fragment(packet, ip_level):
     if ip_level.df:     # Not fragmented
         return False
@@ -211,6 +214,8 @@ def _extract_basic_features(read_instance):
     global Packet_list, Parsed_list
 
     packet_idx = 0
+    # ts: timestamp
+    # buf: buffer
     for ts, buf in read_instance:
         packet_idx += 1
         ether_level = dpkt.ethernet.Ethernet(buf)
@@ -227,11 +232,11 @@ def _extract_basic_features(read_instance):
         new_dict_features = dict()
 
         if ether_level.type == ETH_TYPE_IP:
-            converted_src_addr = _convert_addr(ip_level.src, 'IPv4')
-            converted_dst_addr = _convert_addr(ip_level.dst, 'IPv4')
+            converted_src_ip = _convert_addr(ip_level.src, 'IPv4')
+            converted_dst_ip = _convert_addr(ip_level.dst, 'IPv4')
         elif ether_level.type == ETH_TYPE_IP6:
-            converted_src_addr = _convert_addr(ip_level.src, 'IPv6')
-            converted_dst_addr = _convert_addr(ip_level.dst, 'IPv6')
+            converted_src_ip = _convert_addr(ip_level.src, 'IPv6')
+            converted_dst_ip = _convert_addr(ip_level.dst, 'IPv6')
         else:
             print("### Warning - this packet is not an IP packet. ###")
             print("\tIndex: %d" % packet_idx)
@@ -249,7 +254,7 @@ def _extract_basic_features(read_instance):
         else:                   # Not Fragmented
             tl_data_len = _extract_transport_layer_data_len(ip_level)
             whole_packet = buf
-        if converted_src_addr == converted_dst_addr:
+        if converted_src_ip == converted_dst_ip:
             src_dst_same = 1    # True
         else:
             src_dst_same = 0    # False
@@ -258,8 +263,10 @@ def _extract_basic_features(read_instance):
         # print(len(whole_packet))
         new_dict_features['idx'] = packet_idx
         new_dict_features['timestamp'] = ts
-        new_dict_features['src_addr'] = converted_src_addr
-        new_dict_features['dst_addr'] = converted_dst_addr
+        new_dict_features['src_ip'] = converted_src_ip
+        new_dict_features['dst_ip'] = converted_dst_ip
+        new_dict_features['src_port'] = ip_level.data.sport
+        new_dict_features['dst_port'] = ip_level.data.dport
 
         new_dict_features['protocol_type'] = protocol_type
         new_dict_features['tl_data_len'] = tl_data_len
@@ -274,7 +281,8 @@ def _extract_basic_features(read_instance):
     assert len(Packet_list) == len(Parsed_list)
 
 
-def _extract_time_window_features(past_packet_parsed_list, target_packet, target_parsed):
+def _extract_time_window_features(time_window_sec_stat, target_packet, target_parsed):
+    """
     num_of_packets = len(past_packet_parsed_list)
     num_of_acks = 0
 
@@ -286,6 +294,53 @@ def _extract_time_window_features(past_packet_parsed_list, target_packet, target
         target_parsed['srv_ack_rate'] = 0
     else:
         target_parsed['srv_ack_rate'] = format(num_of_acks / num_of_packets, '0.' + str(DECIMAL_PRECISION) + 'f')
+    """
+    target_src_ip = target_parsed['src_ip']
+    target_dst_ip = target_parsed['dst_ip']
+    target_src_port = target_parsed['src_port']
+    target_dst_port = target_parsed['dst_port']
+
+    if target_src_ip in time_window_sec_stat['forward']:
+        same_sip_pkt_cnt = 0
+        same_dip_pkt_cnt = 0
+        same_sip_sport_pkt_cnt = 0
+        same_dip_dport_pkt_cnt = 0
+
+        same_sip_pkt_dip_cnt = 0
+        same_dip_pkt_src_cnt = 0
+        same_src_dst_pkt_sport_cnt = 0
+        same_src_dst_pkt_dport_cnt = 0
+
+        for src_port in time_window_sec_stat['forward'][target_src_ip]['ports']:
+            if src_port == target_src_port:
+                same_sip_sport_pkt_cnt = time_window_sec_stat['forward'][target_src_ip]['ports'][src_port]
+            same_sip_pkt_cnt += time_window_sec_stat['forward'][target_src_ip]['ports'][src_port]
+        same_sip_pkt_dip_cnt = len(time_window_sec_stat['forward'][target_src_ip]['dst_ip'])
+
+        for src_ip in time_window_sec_stat['backward'][target_dst_ip]:
+            for dst_port in time_window_sec_stat['forward'][src_ip]['dst_ip'][target_dst_ip]:
+                if dst_port == target_dst_port:
+                    same_dip_dport_pkt_cnt = time_window_sec_stat['forward'][src_ip]['dst_ip'][target_dst_ip][dst_port]
+                same_dip_pkt_cnt += time_window_sec_stat['forward'][src_ip]['dst_ip'][target_dst_ip][dst_port]
+        same_dip_pkt_src_cnt = len(time_window_sec_stat['backward'][target_dst_ip])
+    else:
+        pass
+
+    """
+    if target_dst_ip in time_window_sec_stat['dst']:
+        same_ip_pkt_cnt = 0
+        same_ip_port_pkt_cnt = 0
+        for dst_port in time_window_sec_stat['dst'][target_dst_ip].keys():
+            if dst_port == target_dst_port:
+                same_ip_port_pkt_cnt = time_window_sec_stat['dst'][target_dst_ip][dst_port]
+            same_ip_pkt_cnt += time_window_sec_stat['dst'][target_dst_ip][dst_port]
+        target_parsed['same_dst_ip_pkt_cnt_sec'] = same_ip_pkt_cnt
+        target_parsed['same_dst_ip_port_pkt_cnt_sec'] = same_ip_port_pkt_cnt
+    else:
+        target_parsed['same_dst_ip_pkt_cnt_sec'] = 0
+        target_parsed['same_dst_ip_port_pkt_cnt_sec'] = 0
+    """
+    pass
 
 
 def _grasp_first_tcp_state_context(packet):
@@ -308,72 +363,72 @@ def _grasp_tcp_state_context(packet, prev_state, server_ip, client_ip):
     ctrl_flag = tcp_level.flags
 
     if ether_level.type == ETH_TYPE_IP:
-        src_addr = _convert_addr(ip_level.src, 'IPv4')
+        src_ip = _convert_addr(ip_level.src, 'IPv4')
     elif ether_level.type == ETH_TYPE_IP6:
-        src_addr = _convert_addr(ip_level.src, 'IPv6')
+        src_ip = _convert_addr(ip_level.src, 'IPv6')
     else:
         raise NotImplementedError
 
     if prev_state == 'INIT':
-        if ctrl_flag ^ TH_SYN == 0 and src_addr == client_ip:
+        if ctrl_flag ^ TH_SYN == 0 and src_ip == client_ip:
             return 'S0'
-        elif ctrl_flag ^ TH_SYN ^ TH_ACK == 0 and src_addr == server_ip:
+        elif ctrl_flag ^ TH_SYN ^ TH_ACK == 0 and src_ip == server_ip:
             return 'S4'
-        elif ctrl_flag ^ TH_FIN == 0 and src_addr == client_ip:
+        elif ctrl_flag ^ TH_FIN == 0 and src_ip == client_ip:
             return 'SH'
         else:
             return 'OTH'
     elif prev_state == 'S0':
-        if ctrl_flag ^ TH_SYN ^ TH_ACK == 0 and src_addr == server_ip:
+        if ctrl_flag ^ TH_SYN ^ TH_ACK == 0 and src_ip == server_ip:
             return 'S1'
-        elif ctrl_flag ^ TH_RST == 0 and src_addr == server_ip:
+        elif ctrl_flag ^ TH_RST == 0 and src_ip == server_ip:
             return 'REJ'
-        elif ctrl_flag ^ TH_RST == 0 and src_addr == client_ip:
+        elif ctrl_flag ^ TH_RST == 0 and src_ip == client_ip:
             return 'RSTOS0'
         else:
             raise NotImplementedError
     elif prev_state == 'S1':
-        if ctrl_flag ^ TH_ACK == 0 and src_addr == client_ip:
+        if ctrl_flag ^ TH_ACK == 0 and src_ip == client_ip:
             return 'ESTAB'
-        elif ctrl_flag ^ TH_RST == 0 and src_addr == client_ip:
+        elif ctrl_flag ^ TH_RST == 0 and src_ip == client_ip:
             return 'RST0'
-        elif ctrl_flag ^ TH_RST == 0 and src_addr == server_ip:
+        elif ctrl_flag ^ TH_RST == 0 and src_ip == server_ip:
             return 'RSTR'
         else:
             raise NotImplementedError
     elif prev_state == 'ESTAB':
-        if ctrl_flag ^ TH_RST == 0 and src_addr == client_ip:
+        if ctrl_flag ^ TH_RST == 0 and src_ip == client_ip:
             return 'RST0'
-        elif ctrl_flag ^ TH_RST == 0 and src_addr == server_ip:
+        elif ctrl_flag ^ TH_RST == 0 and src_ip == server_ip:
             return 'RSTR'
-        elif ctrl_flag & TH_FIN and src_addr == client_ip:
+        elif ctrl_flag & TH_FIN and src_ip == client_ip:
             return 'S2'
-        elif ctrl_flag & TH_FIN and src_addr == server_ip:
+        elif ctrl_flag & TH_FIN and src_ip == server_ip:
             return 'S3'
         else:
             return 'ESTAB'
     elif prev_state == 'S2':
-        if ctrl_flag ^ TH_FIN ^ TH_ACK == 0 and src_addr == server_ip:
+        if ctrl_flag ^ TH_FIN ^ TH_ACK == 0 and src_ip == server_ip:
             return 'SF'
-        elif ctrl_flag & TH_FIN and src_addr == server_ip:
+        elif ctrl_flag & TH_FIN and src_ip == server_ip:
             return 'S2F'
         else:
             raise NotImplementedError
     elif prev_state == 'S2F':
-        if ctrl_flag & TH_ACK and src_addr == client_ip:
+        if ctrl_flag & TH_ACK and src_ip == client_ip:
             return 'SF'
         else:
             raise NotImplementedError
     elif prev_state == 'S3':
         print(bin(ctrl_flag))
-        if ctrl_flag ^ TH_FIN ^ TH_ACK == 0 and src_addr == client_ip:
+        if ctrl_flag ^ TH_FIN ^ TH_ACK == 0 and src_ip == client_ip:
             return 'SF'
-        elif ctrl_flag & TH_FIN and src_addr == client_ip:
+        elif ctrl_flag & TH_FIN and src_ip == client_ip:
             return 'S3F'
         else:
             raise NotImplementedError
     elif prev_state == 'S3F':
-        if ctrl_flag & TH_ACK and src_addr == server_ip:
+        if ctrl_flag & TH_ACK and src_ip == server_ip:
             return 'SF'
         else:
             raise NotImplementedError
@@ -383,9 +438,9 @@ def _grasp_tcp_state_context(packet, prev_state, server_ip, client_ip):
         else:
             raise NotImplementedError
     elif prev_state == 'S4':
-        if ctrl_flag ^ TH_RST == 0 and src_addr == server_ip:
+        if ctrl_flag ^ TH_RST == 0 and src_ip == server_ip:
             return 'RSTRH'
-        elif ctrl_flag ^ TH_FIN == 0 and src_addr == server_ip:
+        elif ctrl_flag ^ TH_FIN == 0 and src_ip == server_ip:
             return 'SHR'
         else:
             raise NotImplementedError
@@ -403,20 +458,20 @@ def _extract_state_transition():
         if not (parsed['protocol_type'] == 'TCP'):
             continue
 
-        src_addr = parsed['src_addr']
+        src_ip = parsed['src_ip']
         src_port = dpkt.ethernet.Ethernet(packet).data.data.sport
-        dst_addr = parsed['dst_addr']
+        dst_ip = parsed['dst_ip']
         dst_port = dpkt.ethernet.Ethernet(packet).data.data.dport
 
-        if src_addr < dst_addr:
-            smaller = src_addr
+        if src_ip < dst_ip:
+            smaller = src_ip
             smaller_port = src_port
-            bigger = dst_addr
+            bigger = dst_ip
             bigger_port = dst_port
         else:
-            smaller = dst_addr
+            smaller = dst_ip
             smaller_port = dst_port
-            bigger = src_addr
+            bigger = src_ip
             bigger_port = src_port
 
         if not (smaller in tmp_host_state):
@@ -429,8 +484,8 @@ def _extract_state_transition():
             tmp_host_state[smaller][smaller_port][bigger][bigger_port]['state'] = first_state
 
             if tmp_host_state[smaller][smaller_port][bigger][bigger_port]['state'] == 'INIT':
-                tmp_host_state[smaller][smaller_port][bigger][bigger_port]['client_ip'] = src_addr
-                tmp_host_state[smaller][smaller_port][bigger][bigger_port]['server_ip'] = dst_addr
+                tmp_host_state[smaller][smaller_port][bigger][bigger_port]['client_ip'] = src_ip
+                tmp_host_state[smaller][smaller_port][bigger][bigger_port]['server_ip'] = dst_ip
             else:
                 raise NotImplementedError
 
@@ -443,30 +498,90 @@ def _extract_state_transition():
         tmp_host_state[smaller][smaller_port][bigger][bigger_port]['state'] = curr_state
         # del tmp_host_state[smaller]
 
-        # print(src_addr)
-        # print(dst_addr)
+        # print(src_ip)
+        # print(dst_ip)
     pass
 
 
 def _extract_advanced_features():
     packet_parsed_list = zip(Packet_list, Parsed_list)
-    packet_parsed_in_time_window = list()
+    packet_parsed_in_time_window_sec = list()
+
+    time_window_sec_stat = dict()
+    time_window_sec_stat['forward'] = dict()    # dict['forward'][IP]['port'][src_port] = int
+                                            # dict['forward'][IP]['dst_IP'][IP][dst_port] = int
+    time_window_sec_stat['backward'] = dict()    # dict['backward'][IP] = [src_IP1, src_IP2, ...]
 
     for packet, parsed in packet_parsed_list:
-        if len(packet_parsed_in_time_window) > 0:   # Maintaining Time Window
-            tail_ts = parsed['timestamp']
-            while True:
-                head_ts = packet_parsed_in_time_window[0][1]['timestamp']
-                if tail_ts - head_ts > TIME_WINDOW_SIZE:    # If packets out of time window are remained
-                    del packet_parsed_in_time_window[0]     #  then remove them
-                else:           # If no packets out of time window are remained
-                    break       #  then break loop
+        _extract_time_window_features(time_window_sec_stat, packet, parsed)
+        packet_parsed_in_time_window_sec.append((packet, parsed))
 
-        _extract_time_window_features(packet_parsed_in_time_window, packet, parsed)
-        packet_parsed_in_time_window.append((packet, parsed))
+        head_ts = packet_parsed_in_time_window_sec[0][1]['timestamp']
+        tail_ts = parsed['timestamp']
+        while tail_ts - head_ts > TIME_WINDOW_SIZE_SEC:
+            head_src_ip = packet_parsed_in_time_window_sec[0][1]['src_ip']
+            head_dst_ip = packet_parsed_in_time_window_sec[0][1]['dst_ip']
+            head_src_port = packet_parsed_in_time_window_sec[0][1]['src_port']
+            head_dst_port = packet_parsed_in_time_window_sec[0][1]['dst_port']
 
-    del packet_parsed_in_time_window
-    _extract_state_transition()
+            # Clean up Source info and Destination info from stat
+            time_window_sec_stat['forward'][head_src_ip]['ports'][head_src_port] -= 1
+            if time_window_sec_stat['forward'][head_src_ip]['ports'][head_src_port] <= 0:
+                del time_window_sec_stat['forward'][head_src_ip]['ports'][head_src_port]
+
+            time_window_sec_stat['forward'][head_src_ip]['dst_ips'][head_dst_ip][head_dst_port] -= 1
+            if time_window_sec_stat['forward'][head_src_ip]['dst_ips'][head_dst_ip][head_dst_port] <= 0:
+                del time_window_sec_stat['forward'][head_src_ip]['dst_ips'][head_dst_ip][head_dst_port]
+
+                if len(time_window_sec_stat['forward'][head_src_ip]['dst_ips'][head_dst_ip]) == 0:
+                    del time_window_sec_stat['forward'][head_src_ip]['dst_ips'][head_dst_ip]
+
+                    time_window_sec_stat['backward'][head_dst_ip].remove(head_src_ip)
+                    if len(time_window_sec_stat['backward'][head_dst_ip]) == 0:
+                        del time_window_sec_stat['backward'][head_dst_ip]
+
+                    if len(time_window_sec_stat['forward'][head_src_ip]['dst_ips']) == 0:
+                        assert len(time_window_sec_stat['forward'][head_src_ip]['ports']) == 0
+                        del time_window_sec_stat['forward'][head_src_ip]
+
+            # Clean up the head of the time window
+            del packet_parsed_in_time_window_sec[0]
+            head_ts = packet_parsed_in_time_window_sec[0][1]['timestamp']
+
+        src_ip = parsed['src_ip']
+        dst_ip = parsed['dst_ip']
+        src_port = parsed['src_port']
+        dst_port = parsed['dst_port']
+
+        if src_ip not in time_window_sec_stat['forward']:
+            time_window_sec_stat['forward'][src_ip] = dict()
+            time_window_sec_stat['forward'][src_ip]['ports'] = dict()
+            time_window_sec_stat['forward'][src_ip]['ports'][src_port] = 1
+            time_window_sec_stat['forward'][src_ip]['dst_ips'] = dict()
+            time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip] = dict()
+            time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip][dst_port] = 1
+        else:
+            if src_port not in time_window_sec_stat['forward'][src_ip]['ports']:
+                time_window_sec_stat['forward'][src_ip]['ports'][src_port] = 1
+            else:
+                time_window_sec_stat['forward'][src_ip]['ports'][src_port] += 1
+
+            if dst_ip not in time_window_sec_stat['forward'][src_ip]['dst_ips']:
+                time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip] = dict()
+                time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip][dst_port] = 1
+            else:
+                if dst_port not in time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip]:
+                    time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip][dst_port] = 1
+                else:
+                    time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip][dst_port] += 1
+        if dst_ip not in time_window_sec_stat['backward']:
+            time_window_sec_stat['backward'][dst_ip] = set()
+        time_window_sec_stat['backward'][dst_ip].add(src_ip)
+
+    del packet_parsed_in_time_window_sec
+    # Not developed yet
+    # _extract_state_transition()
+    pass
 
 
 def parse_file(read_instance):
@@ -474,8 +589,8 @@ def parse_file(read_instance):
     _extract_advanced_features()
 
 
-read_instance = load_and_read_pcap(Src_file_name)
-parse_file(read_instance)
+read_pcap_instance = load_and_read_pcap(Src_file_name)
+parse_file(read_pcap_instance)
 
 packet_parsed_list = zip(Packet_list, Parsed_list)
 for _, parsed in packet_parsed_list:
