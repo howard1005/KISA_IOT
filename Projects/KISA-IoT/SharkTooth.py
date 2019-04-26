@@ -130,14 +130,16 @@ def _extract_ctrl_flag(ip_packet):
 def _extract_transport_layer_data_len(ip_packet):
     try:
         result = ip_packet.data.data.__len__()
-    except Exception as e:
+    except AttributeError:
         result = ip_packet.data.__len__()
 
     return result
 
 
+"""
 def _get_past_2_seconds(curr_time):
     pass
+"""
 
 
 def _reassemble_packet(frag_id):
@@ -281,7 +283,7 @@ def _extract_basic_features(read_instance):
     assert len(Packet_list) == len(Parsed_list)
 
 
-def _extract_time_window_features(time_window_sec_stat, target_packet, target_parsed):
+def _extract_time_window_features(time_window_sec_stat, target_parsed):
     """
     num_of_packets = len(past_packet_parsed_list)
     num_of_acks = 0
@@ -300,17 +302,26 @@ def _extract_time_window_features(time_window_sec_stat, target_packet, target_pa
     target_src_port = target_parsed['src_port']
     target_dst_port = target_parsed['dst_port']
 
+    same_sip_pkt_cnt = 0
+    same_dip_pkt_cnt = 0
+    same_sip_sport_pkt_cnt = 0
+    same_dip_dport_pkt_cnt = 0
+
+    same_sip_pkt_dip_cnt = 0
+    same_dip_pkt_sip_cnt = 0
+    same_src_dst_pkt_sport_cnt = 0
+    same_src_dst_pkt_dport_cnt = 0
+
     if target_src_ip in time_window_sec_stat['forward']:
-        same_sip_pkt_cnt = 0
-        same_dip_pkt_cnt = 0
-        same_sip_sport_pkt_cnt = 0
-        same_dip_dport_pkt_cnt = 0
-
-        same_sip_pkt_dip_cnt = 0
-        same_dip_pkt_src_cnt = 0
-        same_src_dst_pkt_sport_cnt = 0
-        same_src_dst_pkt_dport_cnt = 0
-
+        for dst_ip in time_window_sec_stat['forward'][target_src_ip]['dst_ips']:
+            for src_port in time_window_sec_stat['forward'][target_src_ip]['dst_ips'][dst_ip]['sPorts']:
+                if src_port == target_src_port:
+                    same_sip_sport_pkt_cnt = time_window_sec_stat['forward'][target_src_ip]['dst_ips'][dst_ip]['sPorts'][src_port]
+                same_sip_pkt_cnt += time_window_sec_stat['forward'][target_src_ip]['dst_ips'][dst_ip]['sPorts'][src_port]
+        same_sip_pkt_dip_cnt = len(time_window_sec_stat['forward'][target_src_ip]['dst_ips'])
+        same_src_dst_pkt_sport_cnt = len(time_window_sec_stat['forward'][target_src_ip]['dst_ips'][target_dst_ip]['sPorts'])
+        same_src_dst_pkt_dport_cnt = len(time_window_sec_stat['forward'][target_src_ip]['dst_ips'][target_dst_ip]['dPorts'])
+        """
         for src_port in time_window_sec_stat['forward'][target_src_ip]['ports']:
             if src_port == target_src_port:
                 same_sip_sport_pkt_cnt = time_window_sec_stat['forward'][target_src_ip]['ports'][src_port]
@@ -322,7 +333,18 @@ def _extract_time_window_features(time_window_sec_stat, target_packet, target_pa
                 if dst_port == target_dst_port:
                     same_dip_dport_pkt_cnt = time_window_sec_stat['forward'][src_ip]['dst_ip'][target_dst_ip][dst_port]
                 same_dip_pkt_cnt += time_window_sec_stat['forward'][src_ip]['dst_ip'][target_dst_ip][dst_port]
-        same_dip_pkt_src_cnt = len(time_window_sec_stat['backward'][target_dst_ip])
+        same_dip_pkt_sip_cnt = len(time_window_sec_stat['backward'][target_dst_ip])
+        """
+    else:
+        pass
+
+    if target_dst_ip in time_window_sec_stat['backward']:
+        for src_ip in time_window_sec_stat['backward'][target_dst_ip]:
+            for dst_port in time_window_sec_stat['forward'][src_ip]['dst_ips'][target_dst_ip]['dPorts']:
+                if dst_port == target_dst_port:
+                    same_dip_dport_pkt_cnt = time_window_sec_stat['forward'][src_ip]['dst_ips'][target_dst_ip]['dPorts'][dst_port]
+                same_dip_pkt_cnt += time_window_sec_stat['forward'][src_ip]['dst_ips'][target_dst_ip]['dPorts'][dst_port]
+        same_dip_pkt_sip_cnt = len(time_window_sec_stat['backward'][target_dst_ip])
     else:
         pass
 
@@ -340,7 +362,14 @@ def _extract_time_window_features(time_window_sec_stat, target_packet, target_pa
         target_parsed['same_dst_ip_pkt_cnt_sec'] = 0
         target_parsed['same_dst_ip_port_pkt_cnt_sec'] = 0
     """
-    pass
+    target_parsed['same_sip_pkt_cnt'] = same_sip_pkt_cnt
+    target_parsed['same_dip_pkt_cnt'] = same_dip_pkt_cnt
+    target_parsed['same_sip_sport_pkt_cnt'] = same_sip_sport_pkt_cnt
+    target_parsed['same_dip_dport_pkt_cnt'] = same_dip_dport_pkt_cnt
+    target_parsed['same_sip_pkt_dip_cnt'] = same_sip_pkt_dip_cnt
+    target_parsed['same_dip_pkt_sip_cnt'] = same_dip_pkt_sip_cnt
+    target_parsed['same_src_dst_pkt_sport_cnt'] = same_src_dst_pkt_sport_cnt
+    target_parsed['same_src_dst_pkt_dport_cnt'] = same_src_dst_pkt_dport_cnt
 
 
 def _grasp_first_tcp_state_context(packet):
@@ -509,11 +538,11 @@ def _extract_advanced_features():
 
     time_window_sec_stat = dict()
     time_window_sec_stat['forward'] = dict()    # dict['forward'][IP]['port'][src_port] = int
-                                            # dict['forward'][IP]['dst_IP'][IP][dst_port] = int
+                                                # dict['forward'][IP]['dst_IP'][IP][dst_port] = int
     time_window_sec_stat['backward'] = dict()    # dict['backward'][IP] = [src_IP1, src_IP2, ...]
 
     for packet, parsed in packet_parsed_list:
-        _extract_time_window_features(time_window_sec_stat, packet, parsed)
+        _extract_time_window_features(time_window_sec_stat, parsed)
         packet_parsed_in_time_window_sec.append((packet, parsed))
 
         head_ts = packet_parsed_in_time_window_sec[0][1]['timestamp']
@@ -525,28 +554,37 @@ def _extract_advanced_features():
             head_dst_port = packet_parsed_in_time_window_sec[0][1]['dst_port']
 
             # Clean up Source info and Destination info from stat
-            time_window_sec_stat['forward'][head_src_ip]['ports'][head_src_port] -= 1
-            if time_window_sec_stat['forward'][head_src_ip]['ports'][head_src_port] <= 0:
-                del time_window_sec_stat['forward'][head_src_ip]['ports'][head_src_port]
+            time_window_sec_stat['forward'][head_src_ip]['dst_ips'][head_dst_ip]['dPorts'][head_dst_port] -= 1
+            if time_window_sec_stat['forward'][head_src_ip]['dst_ips'][head_dst_ip]['dPorts'][head_dst_port] <= 0:
+                del time_window_sec_stat['forward'][head_src_ip]['dst_ips'][head_dst_ip]['dPorts'][head_dst_port]
 
-            time_window_sec_stat['forward'][head_src_ip]['dst_ips'][head_dst_ip][head_dst_port] -= 1
-            if time_window_sec_stat['forward'][head_src_ip]['dst_ips'][head_dst_ip][head_dst_port] <= 0:
-                del time_window_sec_stat['forward'][head_src_ip]['dst_ips'][head_dst_ip][head_dst_port]
+            if time_window_sec_stat['forward'][head_src_ip]['dst_ips'][head_dst_ip]['sPorts'][head_src_port] <= 0:
+                del time_window_sec_stat['forward'][head_src_ip]['dst_ips'][head_dst_ip]['sPorts'][head_src_port]
 
-                if len(time_window_sec_stat['forward'][head_src_ip]['dst_ips'][head_dst_ip]) == 0:
-                    del time_window_sec_stat['forward'][head_src_ip]['dst_ips'][head_dst_ip]
+            if len(time_window_sec_stat['forward'][head_src_ip]['dst_ips'][head_dst_ip]['sPorts']) == 0 and \
+                    len(time_window_sec_stat['forward'][head_src_ip]['dst_ips'][head_dst_ip]['dPorts']) == 0:
+                del time_window_sec_stat['forward'][head_src_ip]['dst_ips'][head_dst_ip]['sPorts']
+                del time_window_sec_stat['forward'][head_src_ip]['dst_ips'][head_dst_ip]['dPorts']
+                del time_window_sec_stat['forward'][head_src_ip]['dst_ips'][head_dst_ip]
 
-                    time_window_sec_stat['backward'][head_dst_ip].remove(head_src_ip)
-                    if len(time_window_sec_stat['backward'][head_dst_ip]) == 0:
-                        del time_window_sec_stat['backward'][head_dst_ip]
+                time_window_sec_stat['forward'][head_src_ip]['ports'][head_src_port].remove(head_dst_ip)
+                if len(time_window_sec_stat['forward'][head_src_ip]['ports'][head_src_port]) == 0:
+                    del time_window_sec_stat['forward'][head_src_ip]['ports'][head_src_port]
 
-                    if len(time_window_sec_stat['forward'][head_src_ip]['dst_ips']) == 0:
-                        assert len(time_window_sec_stat['forward'][head_src_ip]['ports']) == 0
-                        del time_window_sec_stat['forward'][head_src_ip]
+            if len(time_window_sec_stat['forward'][head_src_ip]['ports']) == 0 and \
+                    len(time_window_sec_stat['forward'][head_src_ip]['dst_ips']) == 0:
+                del time_window_sec_stat['forward'][head_src_ip]['ports']
+                del time_window_sec_stat['forward'][head_src_ip]['dst_ips']
+                del time_window_sec_stat['forward'][head_src_ip]
 
-            # Clean up the head of the time window
-            del packet_parsed_in_time_window_sec[0]
+                time_window_sec_stat['backward'][head_dst_ip].remove(head_src_ip)
+                if len(time_window_sec_stat['backward'][head_dst_ip]) == 0:
+                    del time_window_sec_stat['backward'][head_dst_ip]
+
+            # Move the head of the time window
             head_ts = packet_parsed_in_time_window_sec[0][1]['timestamp']
+            # Clean up the old head of the time window
+            del packet_parsed_in_time_window_sec[0]
 
         src_ip = parsed['src_ip']
         dst_ip = parsed['dst_ip']
@@ -556,28 +594,48 @@ def _extract_advanced_features():
         if src_ip not in time_window_sec_stat['forward']:
             time_window_sec_stat['forward'][src_ip] = dict()
             time_window_sec_stat['forward'][src_ip]['ports'] = dict()
-            time_window_sec_stat['forward'][src_ip]['ports'][src_port] = 1
+            # time_window_sec_stat['forward'][src_ip]['ports'][src_port] = 1
+            time_window_sec_stat['forward'][src_ip]['ports'][src_port] = set()
+            time_window_sec_stat['forward'][src_ip]['ports'][src_port].add(dst_ip)
+
             time_window_sec_stat['forward'][src_ip]['dst_ips'] = dict()
             time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip] = dict()
-            time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip][dst_port] = 1
+            time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip]['sPorts'] = dict()
+            time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip]['sPorts'][src_port] = 1
+
+            time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip]['dPorts'] = dict()
+            time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip]['dPorts'][dst_port] = 1
         else:
             if src_port not in time_window_sec_stat['forward'][src_ip]['ports']:
-                time_window_sec_stat['forward'][src_ip]['ports'][src_port] = 1
+                time_window_sec_stat['forward'][src_ip]['ports'][src_port] = set()
+                time_window_sec_stat['forward'][src_ip]['ports'][src_port].add(dst_ip)
             else:
-                time_window_sec_stat['forward'][src_ip]['ports'][src_port] += 1
+                time_window_sec_stat['forward'][src_ip]['ports'][src_port].add(dst_ip)
 
             if dst_ip not in time_window_sec_stat['forward'][src_ip]['dst_ips']:
                 time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip] = dict()
-                time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip][dst_port] = 1
+                time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip]['sPorts'] = dict()
+                time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip]['sPorts'][src_port] = 1
+                time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip]['dPorts'] = dict()
+                time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip]['dPorts'][dst_port] = 1
             else:
-                if dst_port not in time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip]:
-                    time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip][dst_port] = 1
+                if dst_port not in time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip]['dPorts']:
+                    time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip]['dPorts'][dst_port] = 1
                 else:
-                    time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip][dst_port] += 1
+                    time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip]['dPorts'][dst_port] += 1
+
+                if src_port not in time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip]['sPorts']:
+                    time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip]['sPorts'][src_port] = 1
+                else:
+                    time_window_sec_stat['forward'][src_ip]['dst_ips'][dst_ip]['sPorts'][src_port] += 1
+
         if dst_ip not in time_window_sec_stat['backward']:
             time_window_sec_stat['backward'][dst_ip] = set()
         time_window_sec_stat['backward'][dst_ip].add(src_ip)
 
+    del time_window_sec_stat['backward']
+    del time_window_sec_stat['forward']
+    del time_window_sec_stat
     del packet_parsed_in_time_window_sec
     # Not developed yet
     # _extract_state_transition()
@@ -592,6 +650,6 @@ def parse_file(read_instance):
 read_pcap_instance = load_and_read_pcap(Src_file_name)
 parse_file(read_pcap_instance)
 
-packet_parsed_list = zip(Packet_list, Parsed_list)
-for _, parsed in packet_parsed_list:
-    print(parsed)
+Packet_parsed_list = zip(Packet_list, Parsed_list)
+for _, Parsed in Packet_parsed_list:
+    print(Parsed)
