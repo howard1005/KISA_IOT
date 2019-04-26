@@ -1,12 +1,15 @@
 import dpkt
-import copy
+import copy, csv
 
 """
 Src_file_name = 'D:\\tasks\\Projects\\KISA IoT 2년차 (2019년 1월 ~)' \
                 '\\네트워크패킷수집\\EZVIZ_dump_from_n604s\\refresh.pcap'
 """
 # Src_file_name = 'D:\\VM\\shared\\00_frag_udp.pcapng'
-Src_file_name = 'D:\\VM\\shared\\00_frag.pcapng'
+# Src_file_name = 'D:\\VM\\shared\\ezviz_capture_normal_status.pcap'
+# Src_file_name = 'D:\\VM\\shared\\00_frag.pcapng'
+Src_file_name = 'D:\\VM\\shared\\refresh.pcap'
+Exported_file_name = 'D:\\VM\\shared\\features.csv'
 Packet_list = list()
 Parsed_list = list()
 
@@ -56,6 +59,7 @@ def load_and_read_pcap(file_name):
     if Src_file_name.find('.pcapng') >= 0:
         read_instance = dpkt.pcapng.Reader(src_file)
     elif Src_file_name.find('.pcap') >= 0:
+        print('pcap!!')
         read_instance = dpkt.pcap.Reader(src_file)
     else:
         raise NotImplementedError
@@ -220,8 +224,12 @@ def _extract_basic_features(read_instance):
     # buf: buffer
     for ts, buf in read_instance:
         packet_idx += 1
-        ether_level = dpkt.ethernet.Ethernet(buf)
-        ip_level = ether_level.data
+        try:
+            ether_level = dpkt.ethernet.Ethernet(buf)
+            ip_level = ether_level.data
+        except Exception as e:
+            # print(e)
+            continue
 
         if _is_valid_protocol(ether_level) is False:
             continue
@@ -284,19 +292,6 @@ def _extract_basic_features(read_instance):
 
 
 def _extract_time_window_features(time_window_sec_stat, target_parsed):
-    """
-    num_of_packets = len(past_packet_parsed_list)
-    num_of_acks = 0
-
-    for past_packet, past_parsed in past_packet_parsed_list:
-        if 'ACK' in past_parsed['flag']:
-            num_of_acks += 1
-
-    if num_of_packets == 0:
-        target_parsed['srv_ack_rate'] = 0
-    else:
-        target_parsed['srv_ack_rate'] = format(num_of_acks / num_of_packets, '0.' + str(DECIMAL_PRECISION) + 'f')
-    """
     target_src_ip = target_parsed['src_ip']
     target_dst_ip = target_parsed['dst_ip']
     target_src_port = target_parsed['src_port']
@@ -319,22 +314,10 @@ def _extract_time_window_features(time_window_sec_stat, target_parsed):
                     same_sip_sport_pkt_cnt = time_window_sec_stat['forward'][target_src_ip]['dst_ips'][dst_ip]['sPorts'][src_port]
                 same_sip_pkt_cnt += time_window_sec_stat['forward'][target_src_ip]['dst_ips'][dst_ip]['sPorts'][src_port]
         same_sip_pkt_dip_cnt = len(time_window_sec_stat['forward'][target_src_ip]['dst_ips'])
-        same_src_dst_pkt_sport_cnt = len(time_window_sec_stat['forward'][target_src_ip]['dst_ips'][target_dst_ip]['sPorts'])
-        same_src_dst_pkt_dport_cnt = len(time_window_sec_stat['forward'][target_src_ip]['dst_ips'][target_dst_ip]['dPorts'])
-        """
-        for src_port in time_window_sec_stat['forward'][target_src_ip]['ports']:
-            if src_port == target_src_port:
-                same_sip_sport_pkt_cnt = time_window_sec_stat['forward'][target_src_ip]['ports'][src_port]
-            same_sip_pkt_cnt += time_window_sec_stat['forward'][target_src_ip]['ports'][src_port]
-        same_sip_pkt_dip_cnt = len(time_window_sec_stat['forward'][target_src_ip]['dst_ip'])
 
-        for src_ip in time_window_sec_stat['backward'][target_dst_ip]:
-            for dst_port in time_window_sec_stat['forward'][src_ip]['dst_ip'][target_dst_ip]:
-                if dst_port == target_dst_port:
-                    same_dip_dport_pkt_cnt = time_window_sec_stat['forward'][src_ip]['dst_ip'][target_dst_ip][dst_port]
-                same_dip_pkt_cnt += time_window_sec_stat['forward'][src_ip]['dst_ip'][target_dst_ip][dst_port]
-        same_dip_pkt_sip_cnt = len(time_window_sec_stat['backward'][target_dst_ip])
-        """
+        if target_dst_ip in time_window_sec_stat['forward'][target_src_ip]['dst_ips']:
+            same_src_dst_pkt_sport_cnt = len(time_window_sec_stat['forward'][target_src_ip]['dst_ips'][target_dst_ip]['sPorts'])
+            same_src_dst_pkt_dport_cnt = len(time_window_sec_stat['forward'][target_src_ip]['dst_ips'][target_dst_ip]['dPorts'])
     else:
         pass
 
@@ -348,20 +331,6 @@ def _extract_time_window_features(time_window_sec_stat, target_parsed):
     else:
         pass
 
-    """
-    if target_dst_ip in time_window_sec_stat['dst']:
-        same_ip_pkt_cnt = 0
-        same_ip_port_pkt_cnt = 0
-        for dst_port in time_window_sec_stat['dst'][target_dst_ip].keys():
-            if dst_port == target_dst_port:
-                same_ip_port_pkt_cnt = time_window_sec_stat['dst'][target_dst_ip][dst_port]
-            same_ip_pkt_cnt += time_window_sec_stat['dst'][target_dst_ip][dst_port]
-        target_parsed['same_dst_ip_pkt_cnt_sec'] = same_ip_pkt_cnt
-        target_parsed['same_dst_ip_port_pkt_cnt_sec'] = same_ip_port_pkt_cnt
-    else:
-        target_parsed['same_dst_ip_pkt_cnt_sec'] = 0
-        target_parsed['same_dst_ip_port_pkt_cnt_sec'] = 0
-    """
     target_parsed['same_sip_pkt_cnt'] = same_sip_pkt_cnt
     target_parsed['same_dip_pkt_cnt'] = same_dip_pkt_cnt
     target_parsed['same_sip_sport_pkt_cnt'] = same_sip_sport_pkt_cnt
@@ -647,9 +616,21 @@ def parse_file(read_instance):
     _extract_advanced_features()
 
 
+def export_feature_data(parsed_list):
+    field_names = parsed_list[0].keys()
+
+    with open(Exported_file_name, 'wt', newline='\n') as dst_file:
+        writer = csv.DictWriter(dst_file, fieldnames=field_names)
+        writer.writeheader()
+        writer.writerows(parsed_list)
+
+
 read_pcap_instance = load_and_read_pcap(Src_file_name)
 parse_file(read_pcap_instance)
 
+"""
 Packet_parsed_list = zip(Packet_list, Parsed_list)
 for _, Parsed in Packet_parsed_list:
     print(Parsed)
+"""
+export_feature_data(Parsed_list)
