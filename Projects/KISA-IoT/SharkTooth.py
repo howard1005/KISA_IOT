@@ -275,8 +275,12 @@ def _extract_basic_features(read_instance):
         new_dict_features['timestamp'] = ts
         new_dict_features['src_ip'] = converted_src_ip
         new_dict_features['dst_ip'] = converted_dst_ip
-        new_dict_features['src_port'] = ip_level.data.sport
-        new_dict_features['dst_port'] = ip_level.data.dport
+
+        new_dict_features['src_port'] = None    # kub
+        new_dict_features['dst_port'] = None    # kub
+        if(protocol_type == 'TCP' or protocol_type == 'UDP'):   # kub
+            new_dict_features['src_port'] = ip_level.data.sport
+            new_dict_features['dst_port'] = ip_level.data.dport
 
         new_dict_features['protocol_type'] = protocol_type
         new_dict_features['tl_data_len'] = tl_data_len
